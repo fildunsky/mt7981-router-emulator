@@ -140,11 +140,11 @@ pulling the power plug; a preset can choose the hardware behaviour
 
 Buttons
 -------
-"Reset: short" = short press (OpenWrt reboots), "Reset: 10 s" = factory
-reset, "WPS button", "Power cycle" = cold reset.
-"Power + Reset: 10 s (TFTP recovery)" = like holding reset while plugging
-in the power and releasing it after 10 s: U-Boot loads a recovery image
-via TFTP. Bridge LAN to an adapter and run a TFTP server (e.g. Tftpd64):
+"Reset: 10 s" = factory reset, "WPS button", "Power cycle" = cold reset.
+"Power + Reset: 10 s (TFTP recovery)" (while the router is off) = like
+holding reset while plugging in the power and releasing it after 10 s:
+U-Boot loads a recovery image via TFTP. Bridge LAN to an adapter and
+run a TFTP server (e.g. Tftpd64):
   OpenWrt U-Boot: server 192.168.1.254, file
     openwrt-mediatek-filogic-<profile>-ubootmod-initramfs-recovery.itb
   some vendor U-Boots (e.g. Cudy): server 192.168.1.88, file recovery.bin

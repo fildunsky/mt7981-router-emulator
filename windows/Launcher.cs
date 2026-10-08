@@ -43,7 +43,9 @@ namespace RouterEmulator
         TextBox nand, usb, logs;
         CheckBox useUsb, gpioLog, useLogs;
         Button nandBrowse, usbBrowse, logsBrowse;
-        Button start, btnReset, btnFactory, btnWps, btnPower, btnNew, btnTerm;
+        Button start, btnFactory, btnWps, btnPower, btnTftp, btnNew, btnTerm;
+        // buttons held for 10 s: locked, counting down on their text
+        readonly HashSet<Button> counting = new HashSet<Button>();
         Label status;
         Process qemu;
         TerminalForm term;
@@ -180,17 +182,15 @@ namespace RouterEmulator
             Controls.Add(btnPower);
             y += 40;
 
-            btnReset = new Button { Left = 130, Top = y, Width = 150, Height = 28, Enabled = false };
-            Tr(btnReset, "main.reset_short", "Reset: short (reboot)");
-            btnReset.Click += delegate { PressButton("reset-button", 500); };
-            Controls.Add(btnReset);
-            btnFactory = new Button { Left = 290, Top = y, Width = 150, Height = 28, Enabled = false };
+            btnFactory = new Button { Left = 130, Top = y, Width = 310, Height = 28, Enabled = false };
             Tr(btnFactory, "main.reset_factory", "Reset: 10 s (factory)");
             btnFactory.Click += delegate {
                 if (MessageBox.Show(this, L.T("ask.factory", "Holding reset for 10 s makes OpenWrt erase all settings "
                         + "(factory reset). Continue?"), Text, MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning) == DialogResult.Yes)
+                        MessageBoxIcon.Warning) == DialogResult.Yes) {
                     PressButton("reset-button", 10000);
+                    Countdown(btnFactory, "main.reset_factory", "Reset: 10 s (factory)", () => Running);
+                }
             };
             Controls.Add(btnFactory);
             btnWps = new Button { Left = 450, Top = y, Width = 150, Height = 28, Enabled = false };
@@ -202,15 +202,14 @@ namespace RouterEmulator
             // like the real board: hold reset, apply power, release after 10 s;
             // U-Boot then loads the recovery image via TFTP (OpenWrt U-Boot: server
             // 192.168.1.254; some vendor U-Boots: 192.168.1.88, file recovery.bin)
-            var btnTftp = new Button { Left = 130, Top = y, Width = 310, Height = 28 };
+            // (only while the router is off: it is "plugging in the power")
+            btnTftp = new Button { Left = 130, Top = y, Width = 310, Height = 28 };
             Tr(btnTftp, "main.tftp", "Power + Reset: 10 s (TFTP recovery)");
             btnTftp.Click += delegate {
-                if (qemu == null || qemu.HasExited) {
-                    Start(10000);
-                } else {
-                    Qmp("{\"execute\":\"qom-set\",\"arguments\":{\"path\":\"/machine/pinctrl\",\"property\":\"reset-hold-ms\",\"value\":10000}}");
-                    Qmp("{\"execute\":\"system_reset\"}");
-                }
+                if (Running) return;
+                Start(10000);
+                if (Running)
+                    Countdown(btnTftp, "main.tftp", "Power + Reset: 10 s (TFTP recovery)", () => !Running);
             };
             Controls.Add(btnTftp);
 
@@ -713,12 +712,38 @@ namespace RouterEmulator
         void SetRunning(bool on)
         {
             start.Text = on ? L.T("main.power_off", "Power off") : L.T("main.power_on", "Power on");
-            btnReset.Enabled = btnFactory.Enabled = btnWps.Enabled = btnPower.Enabled = btnTerm.Enabled = on;
+            btnWps.Enabled = btnPower.Enabled = btnTerm.Enabled = on;
+            btnFactory.Enabled = on && !counting.Contains(btnFactory);
+            btnTftp.Enabled = !on && !counting.Contains(btnTftp);
             board.Enabled = wan.Enabled = lan.Enabled = useUsb.Enabled = gpioLog.Enabled = !on;
             btnEdit.Enabled = btnNew.Enabled = !on;
             useLogs.Enabled = !on;
             if (!on) OnBoardChanged();
             UpdateFolders();
+        }
+
+        // lock b for 10 s with the seconds left on it, then restore its text
+        // and enable it again if enabledAfter() still allows
+        void Countdown(Button b, string key, string en, Func<bool> enabledAfter)
+        {
+            int left = 10;
+            Action show = () => b.Text = L.F("main.countdown", "{0} - {1} s", L.T(key, en), left);
+            counting.Add(b);
+            b.Enabled = false;
+            show();
+            var t = new System.Windows.Forms.Timer { Interval = 1000 };
+            t.Tick += delegate {
+                if (--left > 0) {
+                    show();
+                    return;
+                }
+                t.Stop();
+                t.Dispose();
+                counting.Remove(b);
+                b.Text = L.T(key, en);
+                b.Enabled = enabledAfter();
+            };
+            t.Start();
         }
 
         void PressButton(string prop, int ms)
