@@ -115,6 +115,7 @@ routers use; saving from the editor drops `;` comments).
 | Netcore N60 Pro (MT7986A) | 2.5G WAN GPY211 + 2.5G LAN GPY211 on switch port 5 + 3×1G MT7531 | DDR4 512 MB | 128 MB | 3.0 | OpenWrt |
 | Bananapi BPi-R4 Lite (MT7987A) | 2.5G WAN internal PHY + 4×1G MT7531 (SFP cage not emulated); Wi-Fi 7 MT7992 card on PCIe — for Wi-Fi install `kmod-mt7996e kmod-mt7992-firmware` | DDR4 2 GB | 256 MB on SPI2, FIP in UBI | 3.0 | OpenWrt |
 | GL.iNet GL-MT6000 (MT7986A) | 2.5G WAN RTL8221B + 2.5G LAN RTL8221B on switch port 5 + 4×1G MT7531 | DDR4 1 GB | **eMMC** | 3.0 | OpenWrt |
+| Huasifei WH3000 Pro eMMC | 2.5G LAN RTL8221B + 1G WAN built-in PHY, no switch | DDR4 1 GB | **eMMC**, vendor layout | 3.0 | OpenWrt (RAX3000M eMMC DDR4 build) |
 
 Netis boards have no bdinfo partition (FIP at 0x380000, ubi at 0x580000;
 MACs in Factory): presets set `openwrt-no-bdinfo=1`. The MT7986 boards use
@@ -182,6 +183,22 @@ partitions. `tools/prepare-nand.sh --soc mt7986 --emmc glinet_gl-mt6000
 25.12.5` builds the image with [`tools/mkemmc.py`](tools/mkemmc.py)
 (sparse, 1 GB).
 
+The Huasifei WH3000 Pro eMMC (MT7981B) keeps its vendor GPT layout
+(u-boot-env, factory, fip, config, kernel, rootfs; `--emmc-layout
+wh3000-pro`), and OpenWrt builds only its firmware (`sysupgrade.bin`, a tar
+with the kernel FIT and the root squashfs), not its bootloader. The preset
+(`openwrt-uboot=`, `--uboot`) takes the OpenWrt BL2 and FIP of the CMCC
+RAX3000M eMMC DDR4 (same SoC, boot medium and DRAM type) and writes a
+U-Boot environment that boots the FIT in the `kernel` partition; the
+kernel finds `root=PARTLABEL=rootfs` through its own device tree, as with
+the vendor bootloader. With dumps of the vendor BL2 (`*boot0*.bin`) and FIP
+(`*fip*.bin`), `--stock DIR` keeps the vendor bootloader instead:
+
+```bash
+tools/prepare-nand.sh --emmc --emmc-layout wh3000-pro --uboot cmcc_rax3000m-emmc-ddr4 huasifei_wh3000-pro-emmc 25.12.5 emmc-wh3000-pro
+./emulator.sh -P huasifei-wh3000-pro-emmc
+```
+
 ## What is emulated
 
 All device models live in `hw/arm/mt7981/` of the QEMU tree
@@ -234,7 +251,7 @@ there is kept.
 
 - [`tools/prepare-nand.sh`](tools/prepare-nand.sh) `[--stock DIR [--nor] | --local DIR] [--flash-mb N] [--no-bdinfo] PROFILE [VERSION] [OUTDIR]` — builds a NAND folder for an OpenWrt device profile: downloads the official OpenWrt U-Boot images (`PROFILE-ubootmod-*` or `PROFILE-*`, sha256 verified), or uses own builds (`--local`), or keeps a vendor BL2/FIP (`--stock`) with the OpenWrt `sysupgrade.bin` in the vendor layout; `--no-bdinfo` for boards without a bdinfo partition, `--nor` for SPI-NOR boards (vendor BL2/FIP + the OpenWrt `sysupgrade.bin` in the `firmware` partition), `--soc mt7986` for MT7986 boards (partition files `mt7986.mtdN.*`, minimal Wi-Fi EEPROM in an empty Factory), `--ubi-fip` for "spim-nand-ubi" BL2s (BL2 at 0, UBI from 0x200000 with the FIP as volume `fip`). Factory/bdinfo come from `factory/`.
 - [`tools/mknand.py`](tools/mknand.py) — create / edit images: `create` (BL2, FIP, Factory, bdinfo, UBI from `.itb` or a `sysupgrade.bin`), `write --part fip`, `read`, `split`, `join`, `--flash-mb 256`, `--no-bdinfo`, `nor` (SPI-NOR folder).
-- [`tools/mkemmc.py`](tools/mkemmc.py) — eMMC image (`flash=emmc`): BL2 in boot0, GPT user area with u-boot-env, factory, fip, kernel, rootfs (GL-MT6000 layout), OpenWrt `squashfs-factory.bin` in kernel + rootfs.
+- [`tools/mkemmc.py`](tools/mkemmc.py) — eMMC image (`flash=emmc`): BL2 in boot0, GPT user area with u-boot-env, factory, fip, kernel, rootfs (GL-MT6000 layout, or `--layout wh3000-pro`), OpenWrt `squashfs-factory.bin` in kernel + rootfs or `--sysupgrade` (sysupgrade tar), `--boot-env` (OpenWrt U-Boot environment that boots the `kernel` partition).
 
 ## Running
 
@@ -332,7 +349,8 @@ GMAC1, switch), WR3000H (DDR3 preloader), WR3000S (WAN on a switch port),
 TR3000 (no switch, one LAN on the built-in PHY), Netis NX31 (flash layout
 without bdinfo) and the MT7986 boards Redmi AX6000 (DDR4, WAN on a switch
 port), Netcore N60 (DDR3, RTL8221B), N60 Pro (GPY211 on GMAC1 and on
-switch port 5), GL.iNet GL-MT6000 (eMMC) and the MT7987 Bananapi BPi-R4
+switch port 5), GL.iNet GL-MT6000 (eMMC), Huasifei WH3000 Pro eMMC (vendor
+eMMC layout) and the MT7987 Bananapi BPi-R4
 Lite (NAND on SPI2, FIP in UBI, internal 2.5G PHY). Flash folders are built for these tests only, never
 packaged.
 To release, change [`VERSION`](VERSION) and push to `main`: when the tag
