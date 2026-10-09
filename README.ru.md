@@ -119,6 +119,7 @@ Windows: скачайте zip из релиза (или соберите сам�
 | Netcore N60 Pro (MT7986A) | 2.5G WAN GPY211 + 2.5G LAN GPY211 на порту 5 коммутатора + 3×1G MT7531 | DDR4 512 МБ | 128 МБ | 3.0 | OpenWrt |
 | Bananapi BPi-R4 Lite (MT7987A) | 2.5G WAN внутренний PHY + 4×1G MT7531 (SFP не эмулируется); карта Wi-Fi 7 MT7992 на PCIe — для Wi-Fi поставьте `kmod-mt7996e kmod-mt7992-firmware` | DDR4 2 ГБ | 256 МБ на SPI2, FIP в UBI | 3.0 | OpenWrt |
 | GL.iNet GL-MT6000 (MT7986A) | 2.5G WAN RTL8221B + 2.5G LAN RTL8221B на порту 5 коммутатора + 4×1G MT7531 | DDR4 1 ГБ | **eMMC** | 3.0 | OpenWrt |
+| Huasifei WH3000 Pro eMMC | 2.5G LAN RTL8221B + 1G WAN на встроенном PHY, без коммутатора | DDR4 1 ГБ | **eMMC**, разметка производителя | 3.0 | OpenWrt (сборка для RAX3000M eMMC DDR4) |
 
 У плат Netis нет раздела bdinfo (FIP с 0x380000, ubi с 0x580000; MAC — в
 Factory): в пресетах стоит `openwrt-no-bdinfo=1`. У плат на MT7986 та же
@@ -185,6 +186,22 @@ rootfs — разделы GPT. `tools/prepare-nand.sh --soc mt7986 --emmc
 glinet_gl-mt6000 25.12.5` собирает образ через
 [`tools/mkemmc.py`](tools/mkemmc.py) (разреженный, 1 ГБ).
 
+У Huasifei WH3000 Pro eMMC (MT7981B) разметка GPT от производителя
+(u-boot-env, factory, fip, config, kernel, rootfs; `--emmc-layout
+wh3000-pro`), а OpenWrt собирает для неё только прошивку (`sysupgrade.bin` —
+tar с FIT ядра и squashfs корня), без загрузчика. Пресет (`openwrt-uboot=`,
+`--uboot`) берёт BL2 и FIP OpenWrt от CMCC RAX3000M eMMC DDR4 (тот же SoC,
+носитель загрузки и тип памяти) и записывает окружение U-Boot, которое
+загружает FIT из раздела `kernel`; `root=PARTLABEL=rootfs` ядро берёт из
+своего дерева устройств, как и со стоковым загрузчиком. С дампами стоковых
+BL2 (`*boot0*.bin`) и FIP (`*fip*.bin`) ключ `--stock ПАПКА` оставляет
+стоковый загрузчик:
+
+```bash
+tools/prepare-nand.sh --emmc --emmc-layout wh3000-pro --uboot cmcc_rax3000m-emmc-ddr4 huasifei_wh3000-pro-emmc 25.12.5 emmc-wh3000-pro
+./emulator.sh -P huasifei-wh3000-pro-emmc
+```
+
 ## Что эмулируется
 
 Все модели устройств — в `hw/arm/mt7981/` дерева QEMU
@@ -237,7 +254,7 @@ bdinfo, FIP, firmware). Если файлы меньше флеша (напри�
 
 - [`tools/prepare-nand.sh`](tools/prepare-nand.sh) `[--stock ПАПКА [--nor] | --local ПАПКА] [--flash-mb N] [--no-bdinfo] ПРОФИЛЬ [ВЕРСИЯ] [ПАПКА_NAND]` — собирает папку NAND для профиля устройства OpenWrt: скачивает официальные образы с U-Boot OpenWrt (`ПРОФИЛЬ-ubootmod-*` или `ПРОФИЛЬ-*`, с проверкой sha256), или берёт свои сборки (`--local`), или оставляет стоковые BL2/FIP (`--stock`) с OpenWrt `sysupgrade.bin` в стоковой разметке; `--no-bdinfo` — для плат без раздела bdinfo, `--nor` — для плат с SPI-NOR (стоковые BL2/FIP + OpenWrt `sysupgrade.bin` в разделе `firmware`), `--soc mt7986` — для плат на MT7986 (файлы разделов `mt7986.mtdN.*`, минимальный EEPROM Wi-Fi в пустом Factory), `--ubi-fip` — для BL2 «spim-nand-ubi» (BL2 с 0, UBI с 0x200000, FIP — том `fip`). Factory/bdinfo берутся из `factory/`.
 - [`tools/mknand.py`](tools/mknand.py) — создание и правка образов: `create` (BL2, FIP, Factory, bdinfo, UBI из `.itb` или `sysupgrade.bin`), `write --part fip`, `read`, `split`, `join`, `--flash-mb 256`, `--no-bdinfo`, `nor` (папка SPI-NOR).
-- [`tools/mkemmc.py`](tools/mkemmc.py) — образ eMMC (`flash=emmc`): BL2 в boot0, GPT с разделами u-boot-env, factory, fip, kernel, rootfs (разметка GL-MT6000), OpenWrt `squashfs-factory.bin` в kernel + rootfs.
+- [`tools/mkemmc.py`](tools/mkemmc.py) — образ eMMC (`flash=emmc`): BL2 в boot0, GPT с разделами u-boot-env, factory, fip, kernel, rootfs (разметка GL-MT6000 или `--layout wh3000-pro`), OpenWrt `squashfs-factory.bin` в kernel + rootfs или `--sysupgrade` (tar sysupgrade), `--boot-env` (окружение U-Boot OpenWrt, загружающее раздел `kernel`).
 
 ## Запуск
 
@@ -337,7 +354,8 @@ Linux и Windows и каждым загружает по одному пресе
 TR3000 (без коммутатора, один LAN на встроенном PHY), Netis NX31 (разметка
 флеша без bdinfo) и платы на MT7986: Redmi AX6000 (DDR4, WAN на порту
 коммутатора), Netcore N60 (DDR3, RTL8221B), N60 Pro (GPY211 на GMAC1 и на
-порту 5 коммутатора), GL.iNet GL-MT6000 (eMMC) и Bananapi BPi-R4 Lite на
+порту 5 коммутатора), GL.iNet GL-MT6000 (eMMC), Huasifei WH3000 Pro eMMC
+(разметка eMMC производителя) и Bananapi BPi-R4 Lite на
 MT7987 (NAND на SPI2, FIP в UBI, внутренний 2.5G PHY). Папки флеша собираются только для этих тестов и в пакеты
 не попадают. Чтобы выпустить релиз, измените [`VERSION`](VERSION) и отправьте
 в `main`: если тега `v<VERSION>` ещё нет, CI соберёт с PGO, проверит,
