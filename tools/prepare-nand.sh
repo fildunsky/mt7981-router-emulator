@@ -41,6 +41,15 @@
 #                     glinet_gl-mt6000): OUTDIR (default emmc-NAME) gets
 #                     one image SOC.emmc.img built by tools/mkemmc.py from
 #                     preloader.bin, bl31-uboot.fip, squashfs-factory.bin
+#                     (or squashfs-sysupgrade.bin, a tar with kernel and
+#                     root); with --stock: the vendor BL2 (*boot0*.bin), FIP
+#                     (*fip*.bin) and, if there, Factory and boot1 dumps
+#     --emmc-layout L eMMC GPT layout of tools/mkemmc.py (default
+#                     gl-mt6000; wh3000-pro: Huasifei WH3000 Pro eMMC)
+#     --uboot PROF    eMMC board without an OpenWrt U-Boot build: take
+#                     preloader.bin + bl31-uboot.fip of the OpenWrt profile
+#                     PROF (same SoC, eMMC, DRAM type) and write an
+#                     environment that boots the "kernel" partition
 #
 # Factory (Wi-Fi EEPROM) and bdinfo (MAC) are taken from ./factory/ if
 # present (*Factory*.bin whose EEPROM chip ID matches the SoC, *bdinfo*.bin),
@@ -56,6 +65,8 @@ NORMB=16
 SOC=mt7981
 EMMC=
 UBIFIP=
+ELAYOUT=gl-mt6000
+UBOOT=
 while [ $# -gt 0 ]; do
     case $1 in
     --stock) STOCK=$2; shift 2 ;;
@@ -66,9 +77,11 @@ while [ $# -gt 0 ]; do
     --nor-mb) NORMB=$2; shift 2 ;;
     --soc) SOC=$2; shift 2 ;;
     --emmc) EMMC=1; shift ;;
+    --emmc-layout) ELAYOUT=$2; shift 2 ;;
+    --uboot) UBOOT=$2; shift 2 ;;
     --ubi-fip) LAYOUT="--parts BL2:0x200000,ubi:-"; UBIFIP=--fip-in-ubi; shift ;;
     --parts) LAYOUT="--parts $2"; shift 2 ;;
-    -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
     *) break ;;
     esac
 done
@@ -104,12 +117,22 @@ if [ -n "$NOR" ] && [ -z "$STOCK" ]; then
 fi
 if [ -n "$STOCK" ]; then
     # vendor BL2/FIP + OpenWrt sysupgrade.bin in UBI kernel/rootfs volumes
+    # (eMMC: in the kernel/rootfs partitions)
     SPFX=$BASE-squashfs-sysupgrade.bin
-    BL2=$(ls "$STOCK"/*mtd0*.bin 2>/dev/null | head -1)
-    # FIP: by name (mtd3 in layouts without bdinfo), else the mtd4 dump
-    FIP=$(ls "$STOCK"/*FIP*.bin 2>/dev/null | head -1)
-    [ -n "$FIP" ] || FIP=$(ls "$STOCK"/*mtd4*.bin 2>/dev/null | head -1)
-    [ -n "$BL2" ] && [ -n "$FIP" ] || { echo "need $STOCK/*mtd0*.bin and $STOCK/*FIP*.bin or *mtd4*.bin (vendor BL2/FIP dumps)" >&2; exit 1; }
+    if [ -n "$EMMC" ]; then
+        BL2=$(ls "$STOCK"/*boot0*.bin 2>/dev/null | head -1)
+        BOOT1=$(ls "$STOCK"/*boot1*.bin 2>/dev/null | head -1)
+        FIP=$(ls "$STOCK"/*[Ff][Ii][Pp]*.bin 2>/dev/null | head -1)
+        F=$(ls "$STOCK"/*[Ff]actory*.bin 2>/dev/null | head -1)
+        [ -z "$F" ] || FAC=$F
+        [ -n "$BL2" ] && [ -n "$FIP" ] || { echo "need $STOCK/*boot0*.bin and $STOCK/*fip*.bin (vendor BL2/FIP dumps)" >&2; exit 1; }
+    else
+        BL2=$(ls "$STOCK"/*mtd0*.bin 2>/dev/null | head -1)
+        # FIP: by name (mtd3 in layouts without bdinfo), else the mtd4 dump
+        FIP=$(ls "$STOCK"/*FIP*.bin 2>/dev/null | head -1)
+        [ -n "$FIP" ] || FIP=$(ls "$STOCK"/*mtd4*.bin 2>/dev/null | head -1)
+        [ -n "$BL2" ] && [ -n "$FIP" ] || { echo "need $STOCK/*mtd0*.bin and $STOCK/*FIP*.bin or *mtd4*.bin (vendor BL2/FIP dumps)" >&2; exit 1; }
+    fi
     # a local sysupgrade.bin (releases may not list every device) or download;
     # only an OpenWrt image (FIT, or a sysupgrade tar) counts: vendor
     # firmware named *sysupgrade*.bin (Cudy's own format, say) is skipped
@@ -133,6 +156,12 @@ if [ -n "$STOCK" ]; then
         SYS=$DL/$SPFX
     fi
     echo "$P (vendor bootloader): $BL2 + $FIP + $SYS"
+    if [ -n "$EMMC" ]; then
+        python3 tools/mkemmc.py -o "$OUT/$SOC.emmc.img" --layout "$ELAYOUT" \
+            --bl2 "$BL2" ${BOOT1:+--boot1 "$BOOT1"} --fip "$FIP" --sysupgrade "$SYS" \
+            ${FAC:+--factory "$FAC"} --wifi-chip "${SOC#mt}"
+        exit 0
+    fi
     if [ -n "$NOR" ]; then
         "${MK[@]}" nor -o "$OUT/" --size-mb "$NORMB" --bl2 "$BL2" --fip "$FIP" \
             --sysupgrade "$SYS" ${FAC:+--factory "$FAC"} ${BDI:+--bdinfo "$BDI"}
@@ -152,18 +181,20 @@ if [ -n "$LOCAL" ]; then
     pick() {
         local s f
         for s in $1; do
-            f=$(ls "$LOCAL"/*"$P-$s" 2>/dev/null | head -1)
+            f=$(ls "$LOCAL"/*"${3:-$P}-$s" 2>/dev/null | head -1)
             [ -n "$f" ] && { echo "$f"; return; }
         done
-        [ "$2" = optional ] || { echo "no *$P-{${1// /,}} in $LOCAL/" >&2; exit 1; }
+        [ "$2" = optional ] || { echo "no *${3:-$P}-{${1// /,}} in $LOCAL/" >&2; exit 1; }
     }
     echo "$P: local images from $LOCAL/"
 else
     wget -q -O "$DL/sha256sums" "$URL/sha256sums"
+    # $3: another profile (--uboot)
     pick() {
-        local s f
+        local s f b=$BASE
+        [ -z "$3" ] || b=${BASE%"$P"}$3
         for s in $1; do
-            f=$BASE-$s
+            f=$b-$s
             if grep -q -- " \*$f\$" "$DL/sha256sums"; then
                 [ -f "$DL/$f" ] || wget -q -O "$DL/$f" "$URL/$f"
                 (cd "$DL" && grep -- " \*$f\$" sha256sums | sha256sum -c --quiet)
@@ -171,15 +202,19 @@ else
                 return
             fi
         done
-        [ "$2" = optional ] || { echo "no $BASE-{${1// /,}} in $URL (wrong profile, or no OpenWrt U-Boot build for it)" >&2; exit 1; }
+        [ "$2" = optional ] || { echo "no $b-{${1// /,}} in $URL (wrong profile, or no OpenWrt U-Boot build for it)" >&2; exit 1; }
     }
 fi
 if [ -n "$EMMC" ]; then
-    BL2=$(pick "$PRE"); FIP=$(pick "$FIPS"); FW=$(pick "squashfs-factory.bin")
-    [ -n "$BL2" ] && [ -n "$FIP" ] && [ -n "$FW" ] || exit 1
-    echo "$P: $(basename "$BL2"), $(basename "$FIP"), $(basename "$FW")"
-    python3 tools/mkemmc.py -o "$OUT/$SOC.emmc.img" --bl2 "$BL2" --fip "$FIP" \
-        --firmware "$FW" ${FAC:+--factory "$FAC"} --wifi-chip "${SOC#mt}"
+    BL2=$(pick "$PRE" "" "$UBOOT"); FIP=$(pick "$FIPS" "" "$UBOOT")
+    # squashfs-factory.bin (kernel + rootfs in one), else the sysupgrade tar
+    FW=$(pick "squashfs-factory.bin" optional); SYS=
+    [ -n "$FW" ] || SYS=$(pick "squashfs-sysupgrade.bin")
+    [ -n "$BL2" ] && [ -n "$FIP" ] && [ -n "$FW$SYS" ] || exit 1
+    echo "$P: $(basename "$BL2"), $(basename "$FIP"), $(basename "$FW$SYS")"
+    python3 tools/mkemmc.py -o "$OUT/$SOC.emmc.img" --layout "$ELAYOUT" \
+        --bl2 "$BL2" --fip "$FIP" ${FW:+--firmware "$FW"} ${SYS:+--sysupgrade "$SYS"} \
+        ${UBOOT:+--boot-env} ${FAC:+--factory "$FAC"} --wifi-chip "${SOC#mt}"
     exit 0
 fi
 BL2=$(pick "$PRE"); FIP=$(pick "$FIPS"); FIT=$(pick "$FITS"); REC=$(pick "$RECS" optional)

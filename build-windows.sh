@@ -98,7 +98,9 @@ for f in presets/*.ini; do
     ver=$(get openwrt-version); ver=${ver:-$VERSION}
     [ -n "$prof" ] && [ -n "$dir" ] || continue
     if [ -n "$stock" ]; then
-        ls "$stock"/*mtd0*.bin >/dev/null 2>&1 || { echo "skip $f: no vendor dumps in $stock/"; continue; }
+        # BL2 dump: mtd0 (NAND, NOR) or eMMC boot0
+        [ -n "$(ls "$stock"/*mtd0*.bin "$stock"/*boot0*.bin 2>/dev/null)" ] ||
+            { echo "skip $f: no vendor dumps in $stock/"; continue; }
         set -- --stock "$stock"
     elif [ -n "$local" ]; then
         [ -d "$local" ] || { echo "skip $f: no local images in $local/"; continue; }
@@ -109,6 +111,8 @@ for f in presets/*.ini; do
     [ "$(get openwrt-no-bdinfo)" = 1 ] && set -- "$@" --no-bdinfo
     [ -n "$(get soc)" ] && set -- "$@" --soc "$(get soc)"
     [ "$(get openwrt-emmc)" = 1 ] && set -- "$@" --emmc
+    [ -n "$(get openwrt-emmc-layout)" ] && set -- "$@" --emmc-layout "$(get openwrt-emmc-layout)"
+    [ -n "$(get openwrt-uboot)" ] && set -- "$@" --uboot "$(get openwrt-uboot)"
     [ "$(get openwrt-ubi-fip)" = 1 ] && set -- "$@" --ubi-fip
     [ -n "$(get openwrt-parts)" ] && set -- "$@" --parts "$(get openwrt-parts)"
     [ "$(get openwrt-nor)" = 1 ] && set -- "$@" --nor --nor-mb "$(get nor)"
